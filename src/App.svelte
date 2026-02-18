@@ -1,11 +1,9 @@
 <script>
   import { onMount } from "svelte";
-  import svelteLogo from "./assets/svelte.svg";
-  import viteLogo from "/vite.svg";
-  import Counter from "./lib/Counter.svelte";
   import { basicSetup, EditorView } from "codemirror";
   import { yaml } from "@codemirror/lang-yaml";
   import { oneDark } from "@codemirror/theme-one-dark";
+
   let editorView;
   onMount(() => {
     editorView = new EditorView({
