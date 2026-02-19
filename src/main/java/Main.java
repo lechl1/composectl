@@ -11,6 +11,7 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static java.io.InputStream.nullInputStream;
 
@@ -347,6 +348,7 @@ class CommandService {
                          boolean stdErrIsFailure,
                          boolean throwOnFailure,
                          List<String> command) throws Exception {
+
         var baos = new ByteArrayOutputStream();
         execute(inputStream, stdErrIsFailure, throwOnFailure, command, baos::writeBytes);
         return baos.toString(StandardCharsets.UTF_8);
@@ -370,41 +372,44 @@ class CommandService {
         var processStderr = p.getErrorStream();
         var processStdin = p.getOutputStream();
 
-        var inputBuf = new byte[8192];
-        var outputBuf = new byte[8192];
-        var errorBuf = new byte[8192];
+        var buf = new byte[104800]; // Single reusable buffer
 
         boolean stdinOpen = true;
         boolean stdoutOpen = true;
         boolean stderrOpen = true;
-
-        // Read all input data into memory first (for simplicity)
-        var inputData = inputStream.readAllBytes();
-        int inputPos = 0;
+        boolean inputEOF = false;
 
         while (stdoutOpen || stderrOpen || stdinOpen) {
             boolean activity = false;
-            System.out.println("Polling process I/O... stdinOpen=" + stdinOpen + " stdoutOpen=" + stdoutOpen + " stderrOpen=" + stderrOpen);
 
-            // Write to process stdin if we have data
-            if (stdinOpen && inputPos < inputData.length) {
+            // Write to process stdin by streaming from inputStream
+            if (stdinOpen && !inputEOF) {
                 try {
-                    int toWrite = Math.min(inputBuf.length, inputData.length - inputPos);
-                    processStdin.write(inputData, inputPos, toWrite);
-                    processStdin.flush();
-                    inputPos += toWrite;
-                    activity = true;
+                    // Check if input data is available
+                    int available = inputStream.available();
+                    if (available > 0 || inputStream.getClass().getSimpleName().equals("ByteArrayInputStream")) {
+                        // Read from input stream
+                        int read = inputStream.read(buf, 0, buf.length);
+                        if (read > 0) {
+                            processStdin.write(buf, 0, read);
+                            processStdin.flush();
+                            activity = true;
+                        } else if (read == -1) {
+                            inputEOF = true;
+                            activity = true;
+                        }
+                    }
                 } catch (IOException e) {
-                    stdinOpen = false;
+                    inputEOF = true;
                 }
             }
 
-            // Close stdin when all input is written
-            if (stdinOpen && inputPos >= inputData.length) {
-                // try {
-                //     processStdin.close();
-                // } catch (IOException ignored) {
-                // }
+            // Close stdin when input stream is exhausted
+            if (stdinOpen && inputEOF) {
+                try {
+                    processStdin.close();
+                } catch (IOException ignored) {
+                }
                 stdinOpen = false;
                 activity = true;
             }
@@ -414,9 +419,9 @@ class CommandService {
                 try {
                     int available = processStdout.available();
                     if (available > 0) {
-                        int read = processStdout.read(outputBuf, 0, Math.min(outputBuf.length, available));
+                        int read = processStdout.read(buf, 0, Math.min(buf.length, available));
                         if (read > 0) {
-                            consumer.accept(Arrays.copyOf(outputBuf, read));
+                            consumer.accept(Arrays.copyOf(buf, read));
                             activity = true;
                         } else if (read == -1) {
                             stdoutOpen = false;
@@ -433,9 +438,9 @@ class CommandService {
                 try {
                     int available = processStderr.available();
                     if (available > 0) {
-                        int read = processStderr.read(errorBuf, 0, Math.min(errorBuf.length, available));
+                        int read = processStderr.read(buf, 0, Math.min(buf.length, available));
                         if (read > 0) {
-                            consumer.accept(Arrays.copyOf(errorBuf, read));
+                            consumer.accept(Arrays.copyOf(buf, read));
                             activity = true;
                         } else if (read == -1) {
                             stderrOpen = false;
