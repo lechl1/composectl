@@ -1,3 +1,4 @@
+import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
@@ -9,23 +10,143 @@ import java.lang.ProcessBuilder.Redirect;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+
+import static java.io.InputStream.nullInputStream;
 
 void main() throws Exception {
     var port = 8080;
-    var dockerService = new DockerService();
+    var yaml = new Yaml();
+    var docker = new DockerService(yaml, "localhost", null, null, new CommandService());
     var server = HttpServer.create(new InetSocketAddress(port), 0);
-    server.createContext("/stacks", new StacksHandler(dockerService));
-    server.createContext("/", new RootHandler());
+    server.createContext("/stacks", new StacksHandler(docker));
     server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     IO.println("Starting server on port " + port);
     server.start();
 }
 
-static class StacksHandler implements HttpHandler {
+interface DefaultHttpHandler extends HttpHandler {
+    @Override
+    default void handle(HttpExchange exchange) throws IOException {
+        int code = 200;
+        Object result;
+        var contentType = "text/plain; charset=utf-8";
+        try {
+            result = switch (exchange.getRequestMethod().toUpperCase()) {
+                case "GET" -> doGet(exchange.getRequestBody(), exchange.getRequestHeaders());
+                case "POST" -> doPost(exchange.getRequestBody(), exchange.getRequestHeaders());
+                case "PUT" -> doPut(exchange.getRequestBody(), exchange.getRequestHeaders());
+                case "DELETE" -> doDelete(exchange.getRequestBody(), exchange.getRequestHeaders());
+                case "PATCH" -> doPatch(exchange.getRequestBody(), exchange.getRequestHeaders());
+                default -> {
+                    code = 405;
+                    yield "Method Not Allowed\n";
+                }
+            };
+        } catch (SocketException e) {
+            code = 504;
+            result = e;
+        } catch (IOException e) {
+            code = 500;
+            result = e;
+        } catch (Exception e) {
+            code = 400;
+            result = e;
+        }
+        String message = null;
+        try {
+            switch (result) {
+                case int c -> {
+                    code = c;
+                    message = switch (c) {
+                        case 200 -> "OK\n";
+                        case 400 -> "Bad Request\n";
+                        case 404 -> "Not Found\n";
+                        case 405 -> "Method Not Allowed\n";
+                        case 500 -> "Internal Server Error\n";
+                        case 501 -> "Not Implemented\n";
+                        default -> "Status " + c + "\n";
+                    };
+                }
+                case Consumer<?> consumer -> {
+                    var headersSent = new AtomicReference<OutputStream>();
+                    try {
+                        ((Consumer<Consumer<byte[]>>) consumer).accept(bytes -> {
+                            try {
+                                if (headersSent.get() == null) {
+                                    exchange.getResponseHeaders().put("Content-Type", List.of("application/octet-stream"));
+                                    exchange.sendResponseHeaders(200, 0);
+                                    headersSent.set(exchange.getResponseBody());
+                                }
+                                headersSent.get().write(bytes);
+                            } catch (IOException e) {
+                                e.printStackTrace(System.err);
+                                throw new UncheckedIOException(e);
+                            }
+                        });
+                    } catch (Exception ex) {
+                        if (headersSent.get() == null) {
+                            exchange.getResponseHeaders().put("Content-Type", List.of("application/octet-stream"));
+                            exchange.sendResponseHeaders(500, 0);
+                            headersSent.set(exchange.getResponseBody());
+                        }
+                        try (var os = headersSent.get()) {
+                            ex.printStackTrace(new PrintStream(os, true, StandardCharsets.UTF_8));
+                        }
+                    }
+                    return;
+                }
+                case String s -> {
+                    if (s.startsWith("<!")) {
+                        contentType = "text/html; charset=utf-8";
+                    }
+                    message = s;
+                }
+                case Exception e -> {
+                    message = e + "\n";
+                }
+                default -> message = result.toString();
+            }
+        } catch (IllegalArgumentException e) {
+            code = 400;
+            message = "Error processing response: " + e + "\n";
+        } catch (Exception e) {
+            code = 500;
+            message = "Error processing response: " + e + "\n";
+        }
+        var bytes = message.getBytes(StandardCharsets.UTF_8);
+        exchange.sendResponseHeaders(code, bytes.length);
+        exchange.getResponseHeaders().add("Content-Type", contentType);
+        try (var os = exchange.getResponseBody()) {
+            os.write(bytes);
+            os.flush();
+        } catch (Exception e) {
+            e.printStackTrace(System.err);
+        }
+    }
+
+    default Object doGet(InputStream requestBody, Headers requestHeaders) throws Exception {
+        return 405;
+    }
+
+    default Object doPost(InputStream requestBody, Headers requestHeaders) throws IOException {
+        return 405;
+    }
+
+    default Object doPut(InputStream requestBody, Headers requestHeaders) throws IOException {
+        return 405;
+    }
+
+    default Object doDelete(InputStream requestBody, Headers requestHeaders) throws IOException {
+        return 405;
+    }
+
+    default Object doPatch(InputStream requestBody, Headers requestHeaders) throws IOException {
+        return 405;
+    }
+}
+
+static class StacksHandler implements DefaultHttpHandler {
     private final DockerService dockerService;
 
     public StacksHandler(DockerService dockerService) {
@@ -33,111 +154,50 @@ static class StacksHandler implements HttpHandler {
     }
 
     @Override
-    public void handle(HttpExchange exchange) throws IOException {
-        try {
-            send(exchange, 405, "Only POST allowed\n");
-        } catch (Exception e) {
-            var sw = new StringWriter();
-            var pw = new PrintWriter(sw);
-            e.printStackTrace(pw);
-            pw.flush();
-            send(exchange, 400, sw.toString());
-            System.err.println(sw.toString());
-        }
-    }
-
-    private void send(HttpExchange exchange, int status, String body) throws IOException {
-        var bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
-        exchange.sendResponseHeaders(status, bytes.length);
-        try (var os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
-    }
-}
-
-static class RootHandler implements HttpHandler {
-    @Override
-    public void handle(HttpExchange exchange) throws IOException {
-        if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
-            var bytes = "Only GET allowed\n".getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().add("Content-Type", "text/plain; charset=utf-8");
-            exchange.sendResponseHeaders(405, bytes.length);
-            try (var os = exchange.getResponseBody()) {
-                os.write(bytes);
+    public Object doGet(InputStream requestBody, Headers requestHeaders) throws Exception {
+        return (Consumer<Consumer<byte[]>>) consumer -> {
+            try {
+                dockerService.composeUp(new InputStreamReader(requestBody, StandardCharsets.UTF_8), consumer);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
             }
-            return;
-        }
-
-        var html = """
-                <!doctype html>
-                <html><head><meta charset="utf-8"><title>stackctl - up</title></head><body>
-                <h3>Paste Docker Compose YAML and click Up</h3>
-                <textarea id="compose" rows="20" cols="80"></textarea><br/>
-                <button id="btn">Up</button>
-                <pre id="out" style="white-space:pre-wrap; border:1px solid #ccc; padding:8px; margin-top:12px; max-height:300px; overflow:auto"></pre>
-                <script>document.getElementById('btn').onclick = async function(){
-                  var txt = document.getElementById('compose').value;
-                  document.getElementById('out').textContent = 'Sending...';
-                  try{
-                    var r = await fetch('/up',{method:'POST', body: txt});
-                    var t = await r.text();
-                    document.getElementById('out').textContent = t;
-                  }catch(e){ document.getElementById('out').textContent = 'Error: ' + e; }
-                };</script>
-                </body></html>
-                """;
-
-        var bytes = html.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().add("Content-Type", "text/html; charset=utf-8");
-        exchange.sendResponseHeaders(200, bytes.length);
-        try (var os = exchange.getResponseBody()) {
-            os.write(bytes);
-        }
+        };
     }
 }
 
-record CommandResult(ByteArrayOutputStream stdOut,
-        ByteArrayOutputStream stdErr,
-        boolean stdErrIsFailure,
-        boolean throwOnFailure,
-        int exitCode) {
-
-    public boolean isFailure() {
-        return exitCode != 0 && stdErrIsFailure && stdErr.size() > 0;
-    }
-
-    public boolean shouldThrow() {
-        return throwOnFailure && isFailure();
-    }
-
-    @Override
-    public final String toString() {
-        return isFailure() && stdErr.size() > 0
-            ? stdErr.toString(StandardCharsets.UTF_8)
-            : stdOut.toString(StandardCharsets.UTF_8);
-    }
-}
-
-class DockerService {
+public static class DockerService {
     private final CommandService commandService;
     private final String internalDomainName;
     private final String externalDomainName;
+    private final Yaml yaml;
     private final String loadBalancerNetwork;
 
-    public DockerService() {
-        this("localhost", null, null, new CommandService());
-    }
-
-    public DockerService(String internalDomainName, String externalDomainName, String loadBalancerNetwork, CommandService commandService) {
-        this.loadBalancerNetwork = loadBalancerNetwork;
-        this.internalDomainName = internalDomainName;
-        this.externalDomainName = externalDomainName;
+    public DockerService(Yaml yaml,
+                         String internalDomainName,
+                         String externalDomainName,
+                         String loadBalancerNetwork,
+                         CommandService commandService) {
+        this.yaml = yaml;
+        this.loadBalancerNetwork = loadBalancerNetwork != null && !loadBalancerNetwork.isBlank() ? loadBalancerNetwork : null;
+        this.internalDomainName = internalDomainName != null && !internalDomainName.isBlank() ? internalDomainName : "localhost";
+        this.externalDomainName = externalDomainName != null && !externalDomainName.isBlank() ? externalDomainName : null;
         this.commandService = commandService;
     }
 
-    public CommandResult composeUp(Map<String, Object> root) throws Exception {
-        var existingNetworks = Set.of(commandService.getString(InputStream.nullInputStream(), false, false, List.of("docker", "network", "ls", "--format", "{{.Name}}")).split("\\s+"));
+    public int composeUp(Reader yaml, Consumer<byte[]> consumer) throws Exception {
+        @SuppressWarnings("unchecked")
+        var root = (Map<String, Object>) this.yaml.load(yaml);
+        if (root == null) {
+            throw new IllegalArgumentException("No yaml file provided");
+        }
+
+        var existingNetworks = commandService.getString(
+                nullInputStream(),
+                false,
+                false,
+                List.of("docker", "network", "ls", "--format", "{{.Name}}")
+        );
+
         var networks = getNetworks(root);
         var networksToCreate = new LinkedHashSet<String>();
         
@@ -149,7 +209,7 @@ class DockerService {
             service.putIfAbsent("restart", "unless-stopped");
 
             for (var networkRef : getNetworkRefs(serviceRef, service)) {
-                var network = (Map<String, Object>) networks.computeIfAbsent(networkRef, k -> new LinkedHashMap<String, Object>());
+                var network = networks.computeIfAbsent(networkRef, _ -> new LinkedHashMap<>());
                 network.putIfAbsent("name", networkRef);
                 network.put("driver", "external");
                 networksToCreate.add(networkRef);
@@ -164,7 +224,7 @@ class DockerService {
                         : "Host(`" + serviceRef + "." + internalDomainName + "`)");
 
                 if (loadBalancerNetwork != null && !loadBalancerNetwork.isBlank()) {
-                    var network = (Map<String, Object>) networks.computeIfAbsent(loadBalancerNetwork, k -> new LinkedHashMap<String, Object>());
+                    var network = networks.computeIfAbsent(loadBalancerNetwork, k -> new LinkedHashMap<String, Object>());
                     network.putIfAbsent("name", loadBalancerNetwork);
                     network.put("driver", "external");
                     networksToCreate.add(loadBalancerNetwork);
@@ -174,24 +234,24 @@ class DockerService {
         try {
             for (var networkRef : networksToCreate) {
                 if (!existingNetworks.contains(networkRef)) {
-                    commandService.execute(InputStream.nullInputStream(), true, true, List.of("docker", "network", "create", "--driver", "bridge", networkRef));
+                    commandService.execute(nullInputStream(), true, true, List.of("docker", "network", "create", "--driver", "bridge", networkRef), consumer);
                 }
             }
         } catch (Exception e) {
             for (var networkRef : networksToCreate) {
                 if (!existingNetworks.contains(networkRef)) {
-                    commandService.execute(InputStream.nullInputStream(), true, true, List.of("docker", "network", "rm", "-f", networkRef));
+                    commandService.execute(nullInputStream(), true, true, List.of("docker", "network", "rm", "-f", networkRef), consumer);
                 }
             }
             throw e;
         }
 
         try {
-            return commandService.execute(toYamlInputStream(root), false, true, List.of("docker", "compose", "-f", "-", "up", "-d", "--wait"));
+            return commandService.execute(toYamlInputStream(root), false, true, List.of("docker", "compose", "-f", "-", "up", "-d", "--wait"), consumer);
         } catch (Exception e) {
             for (var networkRef : networksToCreate) {
                 if (!existingNetworks.contains(networkRef)) {
-                    commandService.execute(InputStream.nullInputStream(), true, true, List.of("docker", "network", "rm", "-f", networkRef));
+                    commandService.execute(nullInputStream(), true, true, List.of("docker", "network", "rm", "-f", networkRef), consumer);
                 }
             }
             throw e;
@@ -283,51 +343,123 @@ class DockerService {
 }
 
 class CommandService {
-    public String getString(InputStream inputStream, boolean stdErrIsFailure, boolean throwOnFailure,
-            List<String> command) throws Exception {
-        return new String(execute(inputStream, stdErrIsFailure, throwOnFailure, command).stdOut().toByteArray());
+    public String getString(InputStream inputStream,
+                         boolean stdErrIsFailure,
+                         boolean throwOnFailure,
+                         List<String> command) throws Exception {
+        var baos = new ByteArrayOutputStream();
+        execute(inputStream, stdErrIsFailure, throwOnFailure, command, baos::writeBytes);
+        return baos.toString(StandardCharsets.UTF_8);
     }
 
-    public CommandResult execute(InputStream inputStream, boolean stdErrIsFailure, boolean throwOnFailure, List<String> command) throws Exception {
+    public int execute(InputStream inputStream,
+                       boolean stdErrIsFailure,
+                       boolean throwOnFailure,
+                       List<String> command,
+                       Consumer<byte[]> consumer) throws Exception {
+
         var pb = new ProcessBuilder(command);
         pb.environment().putAll(System.getenv());
         pb.redirectError(Redirect.PIPE);
         pb.redirectInput(Redirect.PIPE);
         var p = pb.start();
 
-        var successBuffer = new ByteArrayOutputStream(1000000);
-        var errorBuffer = new ByteArrayOutputStream(1000000);
-        try (var threadPoolExecutor = new ThreadPoolExecutor(0, 2, 0, TimeUnit.MICROSECONDS,
-                new ArrayBlockingQueue<>(3),
-                Thread.ofVirtual().uncaughtExceptionHandler(this::uncaughtException).factory(), null)) {
-            threadPoolExecutor.submit(() -> transfer(p.getInputStream(), successBuffer));
-            threadPoolExecutor.submit(() -> transfer(p.getErrorStream(), errorBuffer));
-            var outputStream = p.getOutputStream();
-            inputStream.transferTo(outputStream);
-            var exitCode = p.waitFor();
-            var result = new CommandResult(successBuffer, errorBuffer, stdErrIsFailure, throwOnFailure, exitCode);
-            if (result.shouldThrow()) {
-                   throw new RuntimeException("Exit code " + exitCode + ". Error: "
-                            + new String(errorBuffer.toByteArray(), StandardCharsets.UTF_8));
+        // Single-threaded I/O using polling approach
+        // Note: Process streams are not SelectableChannels, so we use available() polling
+        var processStdout = p.getInputStream();
+        var processStderr = p.getErrorStream();
+        var processStdin = p.getOutputStream();
+
+        var inputBuf = new byte[8192];
+        var outputBuf = new byte[8192];
+        var errorBuf = new byte[8192];
+
+        boolean stdinOpen = true;
+        boolean stdoutOpen = true;
+        boolean stderrOpen = true;
+
+        // Read all input data into memory first (for simplicity)
+        var inputData = inputStream.readAllBytes();
+        int inputPos = 0;
+
+        while (stdoutOpen || stderrOpen || stdinOpen) {
+            boolean activity = false;
+            System.out.println("Polling process I/O... stdinOpen=" + stdinOpen + " stdoutOpen=" + stdoutOpen + " stderrOpen=" + stderrOpen);
+
+            // Write to process stdin if we have data
+            if (stdinOpen && inputPos < inputData.length) {
+                try {
+                    int toWrite = Math.min(inputBuf.length, inputData.length - inputPos);
+                    processStdin.write(inputData, inputPos, toWrite);
+                    processStdin.flush();
+                    inputPos += toWrite;
+                    activity = true;
+                } catch (IOException e) {
+                    stdinOpen = false;
+                }
             }
-            return new CommandResult(successBuffer, errorBuffer, stdErrIsFailure, throwOnFailure, exitCode);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
+
+            // Close stdin when all input is written
+            if (stdinOpen && inputPos >= inputData.length) {
+                // try {
+                //     processStdin.close();
+                // } catch (IOException ignored) {
+                // }
+                stdinOpen = false;
+                activity = true;
+            }
+
+            // Read from process stdout
+            if (stdoutOpen) {
+                try {
+                    int available = processStdout.available();
+                    if (available > 0) {
+                        int read = processStdout.read(outputBuf, 0, Math.min(outputBuf.length, available));
+                        if (read > 0) {
+                            consumer.accept(Arrays.copyOf(outputBuf, read));
+                            activity = true;
+                        } else if (read == -1) {
+                            stdoutOpen = false;
+                            activity = true;
+                        }
+                    }
+                } catch (IOException e) {
+                    stdoutOpen = false;
+                }
+            }
+
+            // Read from process stderr
+            if (stderrOpen) {
+                try {
+                    int available = processStderr.available();
+                    if (available > 0) {
+                        int read = processStderr.read(errorBuf, 0, Math.min(errorBuf.length, available));
+                        if (read > 0) {
+                            consumer.accept(Arrays.copyOf(errorBuf, read));
+                            activity = true;
+                        } else if (read == -1) {
+                            stderrOpen = false;
+                            activity = true;
+                        }
+                    }
+                } catch (IOException e) {
+                    stderrOpen = false;
+                }
+            }
+
+            // If no activity, sleep briefly to avoid busy waiting
+            if (!activity) {
+                if (p.waitFor(1, TimeUnit.MILLISECONDS)) {
+                    break;
+                }
+            }
         }
+
+        var exitCode = p.waitFor();
+        if (exitCode != 0 && throwOnFailure) {
+            throw new RuntimeException("Exit code " + exitCode + ".");
+        }
+        return exitCode;
     }
 
-    private static void transfer(InputStream inputStream, OutputStream outputStream) {
-        try {
-            inputStream.transferTo(outputStream);
-        } catch (IOException e) {
-            e.printStackTrace(System.err);
-        }
-    }
-
-    private void uncaughtException(Thread t, Throwable e) {
-        if (e instanceof InterruptedException) {
-            return;   
-        }
-        e.printStackTrace(System.err);
-    }
 }
