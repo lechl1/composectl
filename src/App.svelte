@@ -4,35 +4,36 @@
   import { yaml } from "@codemirror/lang-yaml";
   import { oneDark } from "@codemirror/theme-one-dark";
 
-  let editorView;
-  onMount(() => {
-    editorView = new EditorView({
-      parent: document.getElementById("editor"),
-      mode: "yaml",
+  function createEditor({ parent, mode, doc = "", extensions = [] }) {
+    var editorView = new EditorView({
+      parent,
+      mode,
+      doc,
       extensions: [
-        yaml(),
         basicSetup,
         oneDark,
+        ...extensions,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             const value = update.state.doc.toString();
           }
         }),
-      ],
+      ]
     });
-    editorView.dispatch({
-      changes: {
-        from: 0,
-        to: 0,
-        insert: `
-services:
+    return editorView;
+}
+
+  let outputLog;
+  let editorView;
+  onMount(() => {
+    editorView = createEditor({
+      parent: document.getElementById("editor"),
+      extensions: [yaml()],
+      doc:  `services:
   postgres:
-    container_name: postgres
     image: postgres
-    restart: always
     cpus: 2
     mem_limit: 2048m
-    memswap_limit: 0
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
@@ -44,30 +45,58 @@ services:
       - "5432:5432"
     volumes:
       - postgres:/var/lib/postgresql/data:rw
-    networks:
-      - homelab
-    # tty: true
 
   pgweb:
-    container_name: pgweb
-    restart: always
     image: sosedoff/pgweb
-    cpus: 0.2
-    mem_limit: 64m
-    memswap_limit: 0
     environment:
       - PGWEB_AUTH_USER=pgweb
       - PGWEB_AUTH_PASSWORD=\${PGWEB_ADMIN_PASSWORD}
       - PGWEB_DATABASE_URL=postgres://postgres:\${POSTGRES_ADMIN_PASSWORD}@postgres:5432/postgres?sslmode=disable
-    networks:
-      - homelab
     labels:
-      - "traefik.http.services.pgweb.loadbalancer.server.port=8081"
-      - "traefik.http.services.pgweb.loadbalancer.server.scheme=http"
+      - "http.port=8081"
 `,
-      },
     });
+    outputLog = createEditor({ parent: document.getElementById("output"), extensions: [] });
   });
+
+  async function dockerComposeUp() {
+    try {
+      const response = await fetch('/api/stacks', {
+        method: 'POST',
+        body: editorView.state.doc.toString(),
+        headers: {
+          'Content-Type': 'application/yaml',
+        },
+      });
+      if (response.ok) {
+        const decoder = new TextDecoder();
+        await response.body.pipeTo(new WritableStream({
+          write(chunk) {
+            const text = decoder.decode(chunk, { stream: true });
+            outputLog.dispatch({
+              changes: {
+                from: outputLog.state.doc.length,
+                insert: text,
+              },
+            });
+            console.log('Received chunk:', text);
+          },
+          close() {
+            console.log('Stream closed');
+          },
+          abort(err) {
+            console.error('Stream error:', err);
+          }
+        }));
+        console.log('Stack deployed successfully');
+      } else {
+        console.error('Failed to deploy stack:', response.statusText);
+      }
+    } catch (error) {
+      console.error('Error sending request:', error);
+    }
+  }
+
 </script>
 
 <main>
@@ -78,7 +107,15 @@ services:
         <span>🟢</span>
       </a>
     </div>
-    <div id="editor"></div>
+    <div>
+      <button on:click={dockerComposeUp}>Up</button>
+      <div id="editor">
+
+      </div>
+      <div id="output">
+
+      </div>
+    </div>
   </div>
 </main>
 
