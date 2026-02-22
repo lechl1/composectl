@@ -48,7 +48,7 @@ function execute(command, stdinString, outputStream) {
 
 async function getExistingNetworks() {
   try {
-    var res = await execute(['docker', 'network', 'ls', '--format', '{{.Name}}']);
+    var res = await execute(['docker', 'network', 'ls', '--format', '{{.name}}']);
     if (res.code !== 0) return new Set();
     return new Set(res.stdout.split(/\s+/).filter(Boolean));
   } catch (e) {

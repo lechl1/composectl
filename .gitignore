@@ -14,6 +14,8 @@ node_modules
 dist
 dist-ssr
 *.local
+.svelte-kit
+build
 
 .vite
 # Editor directories and files
