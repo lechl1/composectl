@@ -1,5 +1,26 @@
 import { EditorView, basicSetup } from "codemirror";
 
+// Common function to handle streaming responses
+async function handleStreamingResponse(response, log, successMessage, errorPrefix) {
+  if (response.ok) {
+    const decoder = new TextDecoder();
+    await response.body.pipeTo(new WritableStream({
+      write(chunk) {
+        const text = decoder.decode(chunk, { stream: true });
+        log(text);
+      },
+      close() {
+
+      },
+      abort(err) {
+        throw `Stream aborted: ${err}`
+      }
+    }));
+  } else {
+     throw "Response error: " + errorPrefix + ": " + response.statusText;
+  }
+}
+
 export function createEditor({ parent, mode, doc = "", extensions = [] }) {
   var editorView = new EditorView({
     parent,
@@ -35,32 +56,7 @@ function calculateStackState(stack) {
   return 'partial';
 }
 
-export async function fetchStacks() {
-  try {
-    const response = await fetch('/api/stacks');
-    if (!response.ok) {
-      return []
-    }
-    return (await response.json() || []).sort((a, b) => a.name.localeCompare(b.name));
-  } catch (error) {
-    console.error('Error fetching stacks:', error);
-    return [];
-  }
-}
-export async function fetchStackDoc(stackName) {
-  try {
-    const response = await fetch(`/api/stacks/${stackName}`);
-    if (response.ok) {
-      return await response.text();
-    } else {
-      console.error('Failed to fetch stack content:', response.statusText);
-      return "";
-    }
-  } catch (error) {
-    console.error('Error fetching stack content:', error);
-    return "";
-  }
-}
+
 export function getStackStatusEmoji(stack) {
   switch (calculateStackState(stack)) {
     case 'running':
@@ -75,10 +71,10 @@ export function getStackStatusEmoji(stack) {
 }
 
 export function getContainerCounts(stack) {
-  const containers = stack.containers || stack.containers || [];
+  const containers = stack.containers || [];
   const total = containers.length;
   const running = containers.filter(c => {
-    const state = c.state || c.state;
+    const state = c.state;
     if (!state) return false;
     return state.running === true;
   }).length;
@@ -87,7 +83,7 @@ export function getContainerCounts(stack) {
 
 export async function selectStack(stackName, editorView) {
   try {
-    const response = await fetch(`/api/stack/${stackName}`);
+    const response = await fetch(`/api/stacks/${stackName}`);
     if (response.ok) {
       const content = await response.text();
       if (editorView) {
@@ -107,120 +103,140 @@ export async function selectStack(stackName, editorView) {
   }
 }
 
-export async function playStack(stack, editorView, outputLog) {
-  try {
-    const response = await fetch(`/api/stack/${stack}`, {
-      method: 'PUT',
-      body: editorView.state.doc.toString(),
-      headers: {
-        'Content-Type': 'application/yaml',
-      },
-    });
-    outputLog.dispatch({
-      changes: {
-        from: 0,
-        to: outputLog.state.doc.length,
-        insert: "",
-      },
-    });
-    if (response.ok) {
-      const decoder = new TextDecoder();
-      await response.body.pipeTo(new WritableStream({
-        write(chunk) {
-          const text = decoder.decode(chunk, { stream: true });
-          outputLog.dispatch({
-            changes: {
-              from: outputLog.state.doc.length,
-              insert: text,
-            },
-          });
-        },
-        close() {
-        },
-        abort(err) {
+async function ftch({ url, log, successMessage, errorMessage, ...options }) {
+  return await fetch(url, options)
+      .then(async response => {
+        const responseText = [];
+        if (response.ok) {
+          if (log) {
+            const decoder = new TextDecoder();
+            await response.body.pipeTo(new WritableStream({
+              write(chunk) {
+                const text = decoder.decode(chunk, {stream: true});
+                log(text);
+                responseText.push(text);
+              },
+              close() {
+
+              },
+              abort(err) {
+                throw `Stream aborted: ${err}`
+              }
+            }));
+            return { text: responseText.join(''), success: true };
+          } else {
+            return { text: await response.text(), success: true };
+          }
+        } else {
+          throw response.statusText;
         }
-      }));
-      console.log('Stack deployed successfully');
-    } else {
-      console.error('Failed to deploy stack:', response.statusText);
+      })
+      .then(result => {
+        console.log(result.text);
+        log(`\n${result.text}`);
+        log(`\n✅ ${successMessage}`);
+        return { text: result.text, success: true };
+      })
+      .catch(responseText => {
+        log(`\n${responseText}`);
+        log(`\n❌ ${errorMessage}`);
+        return { text: responseText, success: false };
+      });
+}
+
+export async function get({ url, log, successMessage, errorMessage, ...options }) {
+  return await ftch({
+    url,
+    log,
+    successMessage,
+    errorMessage,
+    ...options,
+    method: 'GET'
+  });
+}
+
+export async function put({ url, log, successMessage, errorMessage, ...options }) {
+    return await ftch({
+      url,
+      log,
+      successMessage,
+      errorMessage,
+      ...options,
+      method: 'PUT'
+    });
+}
+
+export async function del({ url, log, successMessage, errorMessage, ...options }) {
+  return await ftch({
+    url,
+    log,
+    successMessage,
+    errorMessage,
+    ...options,
+    method: 'DELETE'
+  });
+}
+
+export async function fetchStacks() {
+  try {
+    const response = await fetch('/api/stacks');
+    if (!response.ok) {
+      return []
     }
+    return (await response.json() || []).sort((a, b) => a.name.localeCompare(b.name));
   } catch (error) {
-    console.error('Error sending request:', error);
+    console.error('Error fetching stacks:', error);
+    return [];
   }
 }
 
-export async function stopStack(stack, outputLog) {
-  try {
-    const response = await fetch(`/api/stack/${stack}/stop`, {
-      method: 'POST',
-    });
-    outputLog.dispatch({
-      changes: {
-        from: 0,
-        to: outputLog.state.doc.length,
-        insert: "",
-      },
-    });
-    if (response.ok) {
-      const decoder = new TextDecoder();
-      await response.body.pipeTo(new WritableStream({
-        write(chunk) {
-          const text = decoder.decode(chunk, { stream: true });
-          outputLog.dispatch({
-            changes: {
-              from: outputLog.state.doc.length,
-              insert: text,
-            },
-          });
-        },
-        close() {
-        },
-        abort(err) {
-        }
-      }));
-      console.log('Stack stopped successfully');
-    } else {
-      console.error('Failed to stop stack:', response.statusText);
-    }
-  } catch (error) {
-    console.error('Error sending request:', error);
-  }
+
+export async function fetchStackDoc(stackName, log) {
+  return await get({
+    url: `/api/stacks/${stackName}`,
+    log,
+    successMessage: 'Stack content fetched successfully',
+    errorMessage: 'Failed to fetch stack content'
+  });
 }
 
-export async function deleteStack(stack, outputLog) {
-  try {
-    const response = await fetch(`/api/stacks/${stack}`, {
-      method: 'DELETE',
-    });
-    outputLog.dispatch({
-      changes: {
-        from: 0,
-        to: 0,
-        insert: "",
-      },
-    });
-    if (response.ok) {
-      const decoder = new TextDecoder();
-      await response.body.pipeTo(new WritableStream({
-        write(chunk) {
-          const text = decoder.decode(chunk, { stream: true });
-          outputLog.dispatch({
-            changes: {
-              from: outputLog.state.doc.length,
-              insert: text,
-            },
-          });
-        },
-        close() {
-        },
-        abort(err) {
-        }
-      }));
-      console.log('Stack deleted successfully');
-    } else {
-      console.error('Failed to delete stack:', response.statusText);
-    }
-  } catch (error) {
-    console.error('Error sending request:', error);
-  }
+export async function playStack(stackName, body, log) {
+  return await put({
+    url: `/api/stacks/${stackName}/start`,
+    body,
+    log,
+    successMessage: 'Stack deployed successfully',
+    errorMessage: 'Failed to deploy stack'
+  })
 }
+
+export async function stopStack(stackName, body, log) {
+  return await put({
+    url: `/api/stacks/${stackName}/stop`,
+    body,
+    log,
+    successMessage: 'Stack stopped successfully',
+    errorMessage: 'Failed to stop stack'
+  })
+}
+
+export async function deleteStack(stackName, body, log) {
+  return await del({
+    url: `/api/stacks/${stackName}`,
+    body,
+    log,
+    successMessage: 'Stack deleted successfully',
+    errorMessage: 'Failed to delete stack'
+  })
+}
+
+export async function saveStack(stackName, body, log) {
+  return await put({
+    url: `/api/stacks/${stackName}`,
+    body,
+    log,
+    successMessage: 'Stack saved successfully',
+    errorMessage: 'Failed to save stack'
+  })
+}
+

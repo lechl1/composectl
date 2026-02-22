@@ -4,7 +4,6 @@
   import { page } from "$app/stores";
   import { fetchStackDoc } from "$lib/stackManager.js";
 
-  let doc = $state("");
   let selectedStack = $state("");
 
   // React to changes in the stack parameter
@@ -12,9 +11,6 @@
     const stackParam = $page.params.stack;
     if (stackParam) {
       selectedStack = stackParam
-      fetchStackDoc(stackParam).then(fetchedDoc => {
-        doc = fetchedDoc;
-      });
     }
   });
 
@@ -23,6 +19,6 @@
 <main class="w-full h-screen overflow-hidden">
   <div class="flex flex-row w-full h-full gap-1">
     <StackSideMenu />
-    <YamlEditor {doc} {selectedStack} />
+    <YamlEditor {selectedStack} />
   </div>
 </main>
