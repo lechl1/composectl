@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { fetchStacks, getStackStatusEmoji, getContainerCounts } from "$lib/stackManager.js";
+  import { logout } from "$lib/auth.js";
 
   let stacks = $state([]);
 
@@ -19,11 +20,23 @@
   function selectStack(stackName) {
     goto(`/${stackName}`);
   }
+
+  function handleLogout() {
+    logout();
+  }
 </script>
 
 <main>
   <div class="max-w-4xl mx-auto p-8 text-white/80">
-    <h1 class="text-center text-5xl font-bold mb-8">Select a Stack</h1>
+    <div class="flex justify-between items-center mb-8">
+      <h1 class="text-center text-5xl font-bold flex-1">Select a Stack</h1>
+      <button
+        onclick={handleLogout}
+        class="px-4 py-2 text-white/80 border rounded border-red-500/50 bg-red-500/20 hover:bg-red-500/30 transition-colors text-sm"
+      >
+        🚪 Logout
+      </button>
+    </div>
     <div class="grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4">
       {#each stacks as stack (stack.name)}
         {@const counts = getContainerCounts(stack)}

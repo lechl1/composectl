@@ -1,4 +1,5 @@
 import { EditorView, basicSetup } from "codemirror";
+import { authFetch } from "./auth.js";
 
 // Common function to handle streaming responses
 async function handleStreamingResponse(response, log, successMessage, errorPrefix) {
@@ -81,30 +82,8 @@ export function getContainerCounts(stack) {
   return { running, total };
 }
 
-export async function selectStack(stackName, editorView) {
-  try {
-    const response = await fetch(`/api/stacks/${stackName}`);
-    if (response.ok) {
-      const content = await response.text();
-      if (editorView) {
-        editorView.dispatch({
-          changes: {
-            from: 0,
-            to: editorView.state.doc.length,
-            insert: content,
-          },
-        });
-      }
-    } else {
-      console.error('Failed to fetch stack content:', response.statusText);
-    }
-  } catch (error) {
-    console.error('Error fetching stack content:', error);
-  }
-}
-
 async function ftch({ url, log, successMessage, errorMessage, ...options }) {
-  return await fetch(url, options)
+  return await authFetch(url, options)
       .then(async response => {
         const responseText = [];
         if (response.ok) {
@@ -132,7 +111,6 @@ async function ftch({ url, log, successMessage, errorMessage, ...options }) {
         }
       })
       .then(result => {
-        console.log(result.text);
         log(`\n${result.text}`);
         log(`\n✅ ${successMessage}`);
         return { text: result.text, success: true };
@@ -178,16 +156,11 @@ export async function del({ url, log, successMessage, errorMessage, ...options }
 }
 
 export async function fetchStacks() {
-  try {
-    const response = await fetch('/api/stacks');
+    const response = await authFetch('/api/stacks');
     if (!response.ok) {
       return []
     }
     return (await response.json() || []).sort((a, b) => a.name.localeCompare(b.name));
-  } catch (error) {
-    console.error('Error fetching stacks:', error);
-    return [];
-  }
 }
 
 
