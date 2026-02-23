@@ -21,20 +21,34 @@
     isLoading = true;
 
     try {
-      const response = await fetch("/api/auth/login", {
+      const response = await fetch("/api/login", {
         method: "POST",
         headers: {
-          "Authorization": "Basic " + btoa(`${username}:${password}`)
-        }
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ username, password })
       });
 
       if (response.ok) {
-        const data = await response.text();
-        localStorage.setItem("authToken", data);
-        goto("/");
+        // Expect JSON { token: "..." } or plain text
+        let data;
+        try {
+          data = await response.json();
+        } catch (e) {
+          data = { token: await response.text() };
+        }
+
+        const token = data && data.token ? data.token : data;
+        if (token) {
+          localStorage.setItem("authToken", token);
+          goto("/");
+          return;
+        }
+
+        error = "Login succeeded but no token was returned.";
       } else {
-        const errorData = await response.text();
-        error = errorData.message || "Login failed. Please check your credentials.";
+        const errText = await response.text();
+        error = errText || `Login failed: ${response.status}`;
       }
     } catch (err) {
       error = "An error occurred. Please try again.";
