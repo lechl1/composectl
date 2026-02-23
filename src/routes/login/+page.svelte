@@ -21,24 +21,16 @@
     isLoading = true;
 
     try {
-      const response = await fetch("/api/login", {
+      const response = await fetch("/api/auth/login", {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ username, password })
+          "Authorization": "Basic " + btoa(`${username}:${password}`)
+        }
       });
 
       if (response.ok) {
         // Expect JSON { token: "..." } or plain text
-        let data;
-        try {
-          data = await response.json();
-        } catch (e) {
-          data = { token: await response.text() };
-        }
-
-        const token = data && data.token ? data.token : data;
+        const token = await response.text();
         if (token) {
           localStorage.setItem("authToken", token);
           goto("/");

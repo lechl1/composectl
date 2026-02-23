@@ -43,7 +43,7 @@
 
     try {
       // saveStack does a PUT to /api/stacks/:name
-      const result = await saveStack(name, "", (/*log*/) => {});
+      const result = await saveStack(name, "services: {}", (/*log*/) => {});
       // result is {text, success}
       if (result && result.success) {
         await loadStacks();
@@ -80,12 +80,12 @@
       + Add
     </div>
   {:else}
-    <div class="w-full gap-1 p-1">
+    <div class="gap-1 p-1 w-full max-w-full text-white">
       <input
         bind:this={addInputRef}
         bind:value={newName}
         placeholder="name"
-        class="w-full text-black p-1 rounded"
+        class="w-full max-w-full p-1 rounded"
         on:keydown={(e) => { if (e.key === 'Enter') { createStackIfValid(); } else if (e.key === 'Escape') { cancelAdd(); } }}
         on:blur={cancelAdd}
       />
