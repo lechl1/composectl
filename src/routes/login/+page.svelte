@@ -56,7 +56,7 @@
         <input
           id="username"
           type="text"
-          value={username}
+          bind:value={username}
           required
           disabled={isLoading}
           class="w-full px-4 py-3 bg-white/5 border border-white/30 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"
@@ -71,7 +71,7 @@
         <input
           id="password"
           type="password"
-          value={password}
+          bind:value={password}
           required
           disabled={isLoading}
           class="w-full px-4 py-3 bg-white/5 border border-white/30 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:opacity-50"

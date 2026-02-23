@@ -11,7 +11,10 @@
     saveStack
   } from "$lib/stackManager.js";
   import {fetchStackDoc} from "./stackManager.js";
-
+  import { logout } from "$lib/auth.js";
+  function handleLogout() {
+      logout();
+  }
   let { selectedStack = "" } = $props();
   let doc = $state("");
 
@@ -59,6 +62,7 @@
           let result = null;
           try {
               result = await fetchStackDoc(selectedStack, appendOutput)
+              showEditor = true
           } catch (error) {
               showOutput = true
               return;
@@ -190,12 +194,19 @@
 
 
 <div class="flex flex-col w-full h-full overflow-hidden gap-1">
-    <div class="flex gap-1">
-        <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={playStack}>🚀 Deploy</button>
-        <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={stopStack}>🛑 Stop</button>
-        <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={deleteStack}>🗑️ Trash</button>
-        <button class="cursor-pointer p-2 border rounded text-white/80 text-sm {showEditor ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleEditor}>✏️ Edit</button>
-        <button class="cursor-pointer p-2 border rounded text-white/80 text-sm {showOutput ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleLogs}>📋 Logs</button>
+    <div class="flex justify-between">
+        <div class="flex gap-1">
+            <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={playStack}>🚀 Deploy</button>
+            <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={stopStack}>🛑 Stop</button>
+            <button class="cursor-pointer p-2 border rounded border-white/30 text-white/80 text-sm" onclick={deleteStack}>🗑️ Trash</button>
+            <button class="cursor-pointer p-2 border rounded text-white/80 text-sm {showEditor ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleEditor}>✏️ Edit</button>
+            <button class="cursor-pointeffr p-2 border rounded text-white/80 text-sm {showOutput ? 'border-blue-500 bg-blue-500/20' : 'border-white/30'}" onclick={toggleLogs}>📋 Logs</button>
+        </div>
+        <div class="flex gap-1">
+            <button onclick={handleLogout} class="text-white/80 rounded border-1 border-red-500/50 p-2 cursor-pointer bg-red-500/20 hover:bg-red-500/30 transition-colors">
+                🚪 Logout
+            </button>
+        </div>
     </div>
     <div class="flex-1 flex flex-col gap-1 overflow-hidden">
         <div id={id} class="overflow-auto border rounded {isSaved ? 'border-green-500' : 'border-white/20'} {showEditor ? (showOutput ? 'flex-[7]' : 'flex-1') : 'hidden'}"></div>
