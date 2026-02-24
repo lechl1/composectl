@@ -6,6 +6,7 @@
     getContainerCounts,
     saveStack
   } from "$lib/stackManager.js";
+  import { isAuthenticated } from "$lib/auth.js";
 
   let stacks = $state([]);
 
@@ -14,12 +15,28 @@
   let addInputRef = null;
 
   async function loadStacks() {
+    if (!isAuthenticated()) {
+      stacks = [];
+      return;
+    }
+
     stacks = await fetchStacks();
   }
 
   onMount(async () => {
+    // Only start polling when authenticated
+    if (!isAuthenticated()) {
+      return;
+    }
+
     await loadStacks();
-    const interval = setInterval(loadStacks, 5000);
+    const interval = setInterval(async () => {
+      if (!isAuthenticated()) {
+        clearInterval(interval);
+        return;
+      }
+      await loadStacks();
+    }, 5000);
     return () => clearInterval(interval);
   });
 
@@ -37,6 +54,12 @@
   async function createStackIfValid() {
     const name = (newName || "").trim();
     if (!name) {
+      cancelAdd();
+      return;
+    }
+
+    // Ensure authenticated before attempting to create
+    if (!isAuthenticated()) {
       cancelAdd();
       return;
     }

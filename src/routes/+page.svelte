@@ -2,19 +2,36 @@
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
   import { fetchStacks, getStackStatusEmoji, getContainerCounts } from "$lib/stackManager.js";
-  import { logout } from "$lib/auth.js";
+  import { logout, isAuthenticated } from "$lib/auth.js";
 
   let stacks = $state([]);
 
   async function loadStacks() {
+    // Don't attempt to fetch stacks if the user isn't authenticated
+    if (!isAuthenticated()) {
+      stacks = [];
+      return;
+    }
+
     const data = await fetchStacks();
     stacks = data.sort((a, b) => a.name.localeCompare(b.name));
     console.log(stacks)
   }
 
-  onMount(() => {
-    loadStacks();
-    const interval = setInterval(loadStacks, 5000);
+  onMount(async () => {
+    // Only start polling when authenticated
+    if (!isAuthenticated()) {
+      return;
+    }
+
+    await loadStacks();
+    const interval = setInterval(async () => {
+      if (!isAuthenticated()) {
+        clearInterval(interval);
+        return;
+      }
+      await loadStacks();
+    }, 5000);
     return () => clearInterval(interval);
   });
 
